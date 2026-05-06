@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Web search using DuckDuckGo HTML (no API key required)
+/// Web search using Bing HTML (no API key required)
 pub struct WebSearchTool {
     client: reqwest::Client,
 }
@@ -63,9 +63,9 @@ impl Tool for WebSearchTool {
         let params: WebSearchInput = serde_json::from_value(input)?;
         let num_results = params.num_results.unwrap_or(8).min(20);
 
-        // Use DuckDuckGo HTML search
+        // Use Bing HTML search
         let url = format!(
-            "https://html.duckduckgo.com/html/?q={}",
+            "https://www.bing.com/search?q={}",
             urlencoding::encode(&params.query)
         );
 
@@ -74,8 +74,9 @@ impl Tool for WebSearchTool {
             .get(&url)
             .header(
                 reqwest::header::USER_AGENT,
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
             )
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .send()
             .await?;
 
@@ -87,7 +88,7 @@ impl Tool for WebSearchTool {
         }
 
         let html = response.text().await?;
-        let results = parse_ddg_results(&html, num_results);
+        let results = parse_bing_results(&html, num_results);
 
         if results.is_empty() {
             return Ok(ToolOutput::new(format!(
@@ -140,21 +141,29 @@ mod search_regex {
         };
     }
 
+    // Bing result blocks: <li class="b_algo"> ... </li>
+    static_regex!(
+        result_block,
+        r#"<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>(.*?)</li>"#
+    );
+    // Title link inside result block: <h2><a href="URL" ...>TITLE</a></h2>
     static_regex!(
         result_link,
-        r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>"#
+        r#"<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h2>"#
     );
+    // Caption/snippet: <p class="b_lineclamp2">TEXT</p> or <div class="b_caption"><p>...</p>
     static_regex!(
         result_snippet,
-        r#"<a[^>]*class="result__snippet"[^>]*>([^<]*(?:<[^>]*>[^<]*)*)</a>"#
+        r#"(?:<p[^>]*class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)</p>|<div[^>]*class="b_caption"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)</p>)"#
     );
     static_regex!(tag, r"<[^>]+>");
 }
 
-fn parse_ddg_results(html: &str, max_results: usize) -> Vec<SearchResult> {
+fn parse_bing_results(html: &str, max_results: usize) -> Vec<SearchResult> {
     let mut results = Vec::new();
 
-    let (Some(result_link), Some(result_snippet), Some(tag)) = (
+    let (Some(result_block), Some(result_link), Some(result_snippet), Some(tag)) = (
+        search_regex::result_block(),
         search_regex::result_link(),
         search_regex::result_snippet(),
         search_regex::tag(),
@@ -162,24 +171,34 @@ fn parse_ddg_results(html: &str, max_results: usize) -> Vec<SearchResult> {
         return results;
     };
 
-    let links: Vec<_> = result_link.captures_iter(html).collect();
-    let snippets: Vec<_> = result_snippet.captures_iter(html).collect();
-
-    for (i, link_cap) in links.iter().enumerate() {
+    // First extract result blocks, then parse each block
+    for block_cap in result_block.captures_iter(html) {
         if results.len() >= max_results {
             break;
         }
 
-        let url = decode_ddg_url(&link_cap[1]);
-        let title = html_decode(&link_cap[2]);
+        let block = &block_cap[1];
 
-        if !url.starts_with("http") || url.contains("duckduckgo.com") {
+        // Extract link and title from block
+        let (url, title) = if let Some(link_cap) = result_link.captures(block) {
+            let url = link_cap[1].to_string();
+            let title = html_decode(&tag.replace_all(&link_cap[2], ""));
+            (url, title)
+        } else {
+            continue;
+        };
+
+        if !url.starts_with("http") {
             continue;
         }
 
-        let snippet = if i < snippets.len() {
-            let raw = &snippets[i][1];
-            html_decode(&tag.replace_all(raw, ""))
+        // Extract snippet from block
+        let snippet = if let Some(snip_cap) = result_snippet.captures(block) {
+            let raw = snip_cap.get(1).or_else(|| snip_cap.get(2));
+            match raw {
+                Some(m) => html_decode(&tag.replace_all(m.as_str(), "")),
+                None => String::new(),
+            }
         } else {
             String::new()
         };
@@ -192,23 +211,6 @@ fn parse_ddg_results(html: &str, max_results: usize) -> Vec<SearchResult> {
     }
 
     results
-}
-
-fn decode_ddg_url(url: &str) -> String {
-    // DDG wraps URLs like //duckduckgo.com/l/?uddg=ACTUAL_URL&...
-    if let Some(uddg_start) = url.find("uddg=") {
-        let start = uddg_start + 5;
-        let end = url[start..]
-            .find('&')
-            .map(|i| start + i)
-            .unwrap_or(url.len());
-        let encoded = &url[start..end];
-        urlencoding::decode(encoded)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| encoded.to_string())
-    } else {
-        url.to_string()
-    }
 }
 
 fn html_decode(s: &str) -> String {
