@@ -78,11 +78,12 @@ impl Tool for WebSearchTool {
             )
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::anyhow!("Bing search request failed: {}", e))?;
 
         if !response.status().is_success() {
             return Err(anyhow::anyhow!(
-                "Search failed with status: {}",
+                "Bing search returned status: {}",
                 response.status()
             ));
         }

@@ -84,11 +84,12 @@ impl Tool for WebFetchTool {
             )
             .timeout(Duration::from_secs(timeout))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch {}: {}", params.url, e))?;
 
         let status = response.status();
         if !status.is_success() {
-            return Err(anyhow::anyhow!("HTTP error: {}", status));
+            return Err(anyhow::anyhow!("HTTP error {} for {}", status, params.url));
         }
 
         // Check content length
