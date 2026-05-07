@@ -40,8 +40,10 @@ if ($CurrentBranch -ne $LocalBranch) {
 }
 
 # 4. Configure upstream remote (idempotent)
-git remote get-url $UpstreamName > $null 2>&1
-if ($LASTEXITCODE -eq 0) {
+$remotes = @(git remote)
+$hasUpstream = $remotes -contains $UpstreamName
+
+if ($hasUpstream) {
     $ExistingUrl = git remote get-url $UpstreamName
     if ($ExistingUrl -ne $UpstreamUrl) {
         Write-Err "Remote '$UpstreamName' already exists with a different URL: $ExistingUrl`n  Expected: $UpstreamUrl`n  Please resolve manually."
