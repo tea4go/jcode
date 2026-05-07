@@ -15,6 +15,13 @@ pub fn load_recent_session_cards() -> Result<Vec<SessionCard>> {
     load_recent_session_cards_with_limit(DEFAULT_SESSION_LIMIT)
 }
 
+pub fn load_crashed_session_cards() -> Result<Vec<SessionCard>> {
+    Ok(load_recent_session_cards_with_limit(DEFAULT_SESSION_LIMIT)?
+        .into_iter()
+        .filter(|card| card.subtitle.starts_with("crashed ·"))
+        .collect())
+}
+
 fn load_recent_session_cards_with_limit(limit: usize) -> Result<Vec<SessionCard>> {
     let sessions_dir = jcode_sessions_dir()?;
     if !sessions_dir.exists() {
@@ -82,7 +89,8 @@ fn load_session_card(path: &Path) -> Result<Option<SessionCard>> {
         .get("messages")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    let title = string_field(&value, "title")
+    let title = string_field(&value, "custom_title")
+        .or_else(|| string_field(&value, "title"))
         .or_else(|| latest_user_preview(&value))
         .unwrap_or_else(|| short_name.clone());
 

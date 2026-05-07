@@ -29,6 +29,7 @@ pub enum LoginProviderTarget {
     OpenAi,
     OpenAiApiKey,
     OpenRouter,
+    Bedrock,
     Azure,
     OpenAiCompatible(OpenAiCompatibleProfile),
     Cursor,
@@ -45,6 +46,7 @@ pub enum LoginProviderAuthStateKey {
     Anthropic,
     OpenAi,
     Azure,
+    Bedrock,
     OpenRouterLike,
     Copilot,
     Gemini,
@@ -371,10 +373,10 @@ pub const FIREWORKS_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
 pub const MINIMAX_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     id: "minimax",
     display_name: "MiniMax",
-    api_base: "https://api.minimaxi.com/v1",
+    api_base: "https://api.minimax.io/v1",
     api_key_env: "OPENAI_API_KEY",
     env_file: "minimax.env",
-    setup_url: "https://platform.minimax.io/docs/api-reference/text-openai-api",
+    setup_url: "https://platform.minimax.io/docs/guides/text-generation",
     default_model: Some("MiniMax-M2.7"),
     requires_api_key: true,
 };
@@ -569,6 +571,19 @@ pub const OPENROUTER_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDesc
     recommended: false,
     target: LoginProviderTarget::OpenRouter,
     order: LoginProviderSurfaceOrder::new(Some(4), Some(3), Some(4), Some(3), Some(3)),
+};
+
+pub const BEDROCK_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
+    id: "bedrock",
+    display_name: "AWS Bedrock",
+    auth_kind: LoginProviderAuthKind::ApiKey,
+    auth_state_key: LoginProviderAuthStateKey::Bedrock,
+    auth_status_method: "API key / AWS credentials",
+    aliases: &["aws-bedrock", "aws_bedrock"],
+    menu_detail: "Bedrock API key or AWS credentials, pay-per-token",
+    recommended: false,
+    target: LoginProviderTarget::Bedrock,
+    order: LoginProviderSurfaceOrder::new(Some(5), Some(4), None, None, Some(4)),
 };
 
 pub const AZURE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
@@ -1032,13 +1047,14 @@ pub const GOOGLE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescript
     order: LoginProviderSurfaceOrder::new(Some(13), None, None, None, None),
 };
 
-const LOGIN_PROVIDERS: [LoginProviderDescriptor; 41] = [
+const LOGIN_PROVIDERS: [LoginProviderDescriptor; 42] = [
     AUTO_IMPORT_LOGIN_PROVIDER,
     CLAUDE_LOGIN_PROVIDER,
     OPENAI_LOGIN_PROVIDER,
     OPENAI_API_LOGIN_PROVIDER,
     JCODE_LOGIN_PROVIDER,
     OPENROUTER_LOGIN_PROVIDER,
+    BEDROCK_LOGIN_PROVIDER,
     AZURE_LOGIN_PROVIDER,
     OPENCODE_LOGIN_PROVIDER,
     OPENCODE_GO_LOGIN_PROVIDER,
@@ -1268,7 +1284,7 @@ mod tests {
 
     #[test]
     fn minimax_profile_uses_official_openai_compatible_configuration() {
-        assert_eq!(MINIMAX_PROFILE.api_base, "https://api.minimaxi.com/v1");
+        assert_eq!(MINIMAX_PROFILE.api_base, "https://api.minimax.io/v1");
         assert_eq!(MINIMAX_PROFILE.api_key_env, "OPENAI_API_KEY");
     }
 
@@ -1399,8 +1415,8 @@ mod tests {
             Some("claude")
         );
         assert_eq!(
-            resolve_login_selection("15", &providers).map(|provider| provider.id),
-            Some("cursor")
+            resolve_login_selection("6", &providers).map(|provider| provider.id),
+            Some("bedrock")
         );
         assert_eq!(
             resolve_login_selection("compat", &providers).map(|provider| provider.id),
@@ -1430,15 +1446,15 @@ mod tests {
         );
         assert_eq!(
             resolve_login_selection("7", &providers).map(|provider| provider.id),
+            Some("bedrock")
+        );
+        assert_eq!(
+            resolve_login_selection("8", &providers).map(|provider| provider.id),
             Some("azure")
         );
         assert_eq!(
-            resolve_login_selection("17", &providers).map(|provider| provider.id),
-            Some("gemini")
-        );
-        assert_eq!(
-            resolve_login_selection("18", &providers).map(|provider| provider.id),
-            Some("google")
+            resolve_login_selection("bedrock", &providers).map(|provider| provider.id),
+            Some("bedrock")
         );
     }
 }

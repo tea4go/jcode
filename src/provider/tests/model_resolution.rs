@@ -22,6 +22,21 @@ fn test_provider_for_model_gemini() {
 }
 
 #[test]
+fn test_provider_for_model_bedrock() {
+    assert_eq!(provider_for_model("amazon.nova-pro-v1:0"), Some("bedrock"));
+    assert_eq!(
+        provider_for_model("us.amazon.nova-micro-v1:0"),
+        Some("bedrock")
+    );
+    assert_eq!(
+        provider_for_model(
+            "arn:aws:bedrock:us-east-2:302154194530:inference-profile/us.deepseek.r1-v1:0"
+        ),
+        Some("bedrock")
+    );
+}
+
+#[test]
 fn test_provider_for_model_openrouter() {
     // OpenRouter uses provider/model format
     assert_eq!(
@@ -53,6 +68,12 @@ fn test_openrouter_catalog_model_id_normalizes_bare_openai_and_claude_models() {
         openrouter_catalog_model_id("anthropic/claude-sonnet-4").as_deref(),
         Some("anthropic/claude-sonnet-4")
     );
+    assert_eq!(
+        openrouter_catalog_model_id(
+            "arn:aws:bedrock:us-east-2:302154194530:inference-profile/us.deepseek.r1-v1:0"
+        ),
+        None
+    );
     assert_eq!(openrouter_catalog_model_id("composer-2-fast"), None);
 }
 
@@ -66,6 +87,7 @@ fn test_available_models_display_uses_route_models_and_filters_placeholder_rows(
         antigravity: RwLock::new(None),
         gemini: RwLock::new(None),
         cursor: RwLock::new(None),
+        bedrock: RwLock::new(None),
         openrouter: RwLock::new(None),
         active: RwLock::new(ActiveProvider::OpenAI),
         use_claude_cli: false,
@@ -108,6 +130,7 @@ fn test_set_model_accepts_bare_openai_openrouter_pin_when_openrouter_available()
                 antigravity: RwLock::new(None),
                 gemini: RwLock::new(None),
                 cursor: RwLock::new(None),
+                bedrock: RwLock::new(None),
                 openrouter: RwLock::new(Some(openrouter)),
                 active: RwLock::new(ActiveProvider::OpenAI),
                 use_claude_cli: false,
@@ -146,6 +169,7 @@ fn test_forced_openrouter_treats_claude_like_model_as_provider_local() {
                             antigravity: RwLock::new(None),
                             gemini: RwLock::new(None),
                             cursor: RwLock::new(None),
+                            bedrock: RwLock::new(None),
                             openrouter: RwLock::new(Some(openrouter)),
                             active: RwLock::new(ActiveProvider::OpenRouter),
                             use_claude_cli: false,
@@ -187,6 +211,7 @@ fn test_forced_openrouter_preserves_custom_at_sign_model_ids() {
                             antigravity: RwLock::new(None),
                             gemini: RwLock::new(None),
                             cursor: RwLock::new(None),
+                            bedrock: RwLock::new(None),
                             openrouter: RwLock::new(Some(openrouter)),
                             active: RwLock::new(ActiveProvider::OpenRouter),
                             use_claude_cli: false,
@@ -231,6 +256,7 @@ fn test_config_default_provider_openai_compatible_keeps_gpt_model_provider_local
                             antigravity: RwLock::new(None),
                             gemini: RwLock::new(None),
                             cursor: RwLock::new(None),
+                            bedrock: RwLock::new(None),
                             openrouter: RwLock::new(Some(openrouter)),
                             active: RwLock::new(ActiveProvider::OpenRouter),
                             use_claude_cli: false,
@@ -278,6 +304,7 @@ fn test_custom_compatible_model_routes_do_not_request_openrouter_rewrite() {
                             antigravity: RwLock::new(None),
                             gemini: RwLock::new(None),
                             cursor: RwLock::new(None),
+                            bedrock: RwLock::new(None),
                             openrouter: RwLock::new(Some(openrouter)),
                             active: RwLock::new(ActiveProvider::OpenRouter),
                             use_claude_cli: false,
@@ -320,6 +347,7 @@ fn test_configured_direct_compatible_profiles_are_listed_without_openrouter_key(
                     antigravity: RwLock::new(None),
                     gemini: RwLock::new(None),
                     cursor: RwLock::new(None),
+                    bedrock: RwLock::new(None),
                     openrouter: RwLock::new(None),
                     active: RwLock::new(ActiveProvider::OpenAI),
                     use_claude_cli: false,
@@ -369,6 +397,7 @@ fn test_profile_prefixed_model_switch_reinitializes_direct_compatible_runtime() 
                     antigravity: RwLock::new(None),
                     gemini: RwLock::new(None),
                     cursor: RwLock::new(None),
+                    bedrock: RwLock::new(None),
                     openrouter: RwLock::new(None),
                     active: RwLock::new(ActiveProvider::OpenAI),
                     use_claude_cli: false,
@@ -414,6 +443,7 @@ fn test_forced_copilot_treats_claude_like_model_as_provider_local() {
             antigravity: RwLock::new(None),
             gemini: RwLock::new(None),
             cursor: RwLock::new(None),
+            bedrock: RwLock::new(None),
             openrouter: RwLock::new(None),
             active: RwLock::new(ActiveProvider::Copilot),
             use_claude_cli: false,
@@ -446,6 +476,7 @@ fn test_provider_specific_model_prefix_cannot_bypass_provider_lock() {
                 antigravity: RwLock::new(None),
                 gemini: RwLock::new(None),
                 cursor: RwLock::new(Some(Arc::new(cursor::CursorCliProvider::new()))),
+                bedrock: RwLock::new(None),
                 openrouter: RwLock::new(Some(openrouter)),
                 active: RwLock::new(ActiveProvider::OpenRouter),
                 use_claude_cli: false,

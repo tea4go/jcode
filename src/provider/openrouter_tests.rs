@@ -57,6 +57,30 @@ fn write_test_api_key(temp: &TempDir, env_file: &str, env_key: &str, value: &str
         .expect("write test api key");
 }
 
+fn isolate_openrouter_autodetect_env() -> Vec<EnvVarGuard> {
+    let mut guards = vec![
+        EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE"),
+        EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME"),
+        EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE"),
+        EnvVarGuard::remove("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER"),
+        EnvVarGuard::remove("JCODE_OPENROUTER_MODEL"),
+        EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE"),
+        EnvVarGuard::remove("JCODE_OPENROUTER_ALLOW_NO_AUTH"),
+        EnvVarGuard::remove("JCODE_OPENAI_COMPAT_API_BASE"),
+        EnvVarGuard::remove("JCODE_OPENAI_COMPAT_API_KEY_NAME"),
+        EnvVarGuard::remove("JCODE_OPENAI_COMPAT_ENV_FILE"),
+        EnvVarGuard::remove("JCODE_OPENAI_COMPAT_SETUP_URL"),
+        EnvVarGuard::remove("JCODE_OPENAI_COMPAT_DEFAULT_MODEL"),
+        EnvVarGuard::remove("JCODE_OPENAI_COMPAT_LOCAL_ENABLED"),
+    ];
+    guards.extend(
+        crate::provider_catalog::openai_compatible_profiles()
+            .iter()
+            .map(|profile| EnvVarGuard::remove(profile.api_key_env)),
+    );
+    guards
+}
+
 #[test]
 fn test_has_credentials() {
     let _has_creds = OpenRouterProvider::has_credentials();
@@ -138,6 +162,17 @@ fn named_openai_compatible_provider_exposes_static_models_as_routes() {
 }
 
 #[test]
+fn minimax_profile_exposes_static_models_before_catalog_refresh() {
+    let models = crate::provider_catalog::openai_compatible_profile_static_models(
+        jcode_provider_metadata::MINIMAX_PROFILE,
+    );
+
+    assert!(models.iter().any(|model| model == "MiniMax-M2.7"));
+    assert!(models.iter().any(|model| model == "MiniMax-M2.7-highspeed"));
+    assert!(models.iter().any(|model| model == "MiniMax-M2"));
+}
+
+#[test]
 fn comtegra_profile_uses_endpoint_default_max_tokens() {
     let _lock = ENV_LOCK.lock().unwrap();
     let _override = EnvVarGuard::remove("JCODE_OPENROUTER_MAX_TOKENS");
@@ -199,12 +234,7 @@ fn autodetects_single_saved_openai_compatible_profile() {
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
-    let _openrouter_base = EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE");
-    let _openrouter_key = EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME");
-    let _openrouter_file = EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE");
-    let _openrouter_dynamic = EnvVarGuard::remove("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER");
-    let _openrouter_api_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
-    let _opencode_api_key = EnvVarGuard::remove("OPENCODE_API_KEY");
+    let _env = isolate_openrouter_autodetect_env();
 
     let opencode = crate::provider_catalog::resolve_openai_compatible_profile(
         crate::provider_catalog::OPENCODE_PROFILE,
@@ -229,13 +259,7 @@ fn autodetects_single_saved_local_openai_compatible_profile() {
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
-    let _openrouter_base = EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE");
-    let _openrouter_key = EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME");
-    let _openrouter_file = EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE");
-    let _openrouter_dynamic = EnvVarGuard::remove("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER");
-    let _openrouter_no_auth = EnvVarGuard::remove("JCODE_OPENROUTER_ALLOW_NO_AUTH");
-    let _openrouter_api_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
-    let _lmstudio_api_key = EnvVarGuard::remove("LMSTUDIO_API_KEY");
+    let _env = isolate_openrouter_autodetect_env();
 
     let lmstudio = crate::provider_catalog::resolve_openai_compatible_profile(
         crate::provider_catalog::LMSTUDIO_PROFILE,
@@ -265,13 +289,7 @@ fn does_not_guess_when_multiple_saved_openai_compatible_profiles_exist() {
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
-    let _openrouter_base = EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE");
-    let _openrouter_key = EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME");
-    let _openrouter_file = EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE");
-    let _openrouter_dynamic = EnvVarGuard::remove("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER");
-    let _openrouter_api_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
-    let _opencode_api_key = EnvVarGuard::remove("OPENCODE_API_KEY");
-    let _chutes_api_key = EnvVarGuard::remove("CHUTES_API_KEY");
+    let _env = isolate_openrouter_autodetect_env();
 
     let opencode = crate::provider_catalog::resolve_openai_compatible_profile(
         crate::provider_catalog::OPENCODE_PROFILE,
@@ -305,13 +323,7 @@ fn autodetected_profile_seeds_default_model_and_cache_namespace() {
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
-    let _openrouter_base = EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE");
-    let _openrouter_key = EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME");
-    let _openrouter_file = EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE");
-    let _openrouter_dynamic = EnvVarGuard::remove("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER");
-    let _openrouter_model = EnvVarGuard::remove("JCODE_OPENROUTER_MODEL");
-    let _openrouter_cache_ns = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
-    let _zhipu = EnvVarGuard::remove("ZHIPU_API_KEY");
+    let _env = isolate_openrouter_autodetect_env();
 
     let zai = crate::provider_catalog::resolve_openai_compatible_profile(
         crate::provider_catalog::ZAI_PROFILE,
@@ -444,6 +456,8 @@ fn direct_deepseek_profile_uses_static_1m_context_when_catalog_is_absent() {
 
 #[test]
 fn named_openai_compatible_model_context_window_overrides_default() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _namespace = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
     let mut config = crate::config::NamedProviderConfig {
         base_url: "https://compat.example.test/v1".to_string(),
         api_key: Some("test".to_string()),
@@ -470,6 +484,7 @@ fn named_openai_compatible_loads_api_key_from_env_file() {
     let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
     let _home = EnvVarGuard::set("HOME", temp.path());
     let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
+    let _namespace = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
     let _api_key = EnvVarGuard::remove("CUSTOM_API_KEY");
     write_test_api_key(&temp, "custom.env", "CUSTOM_API_KEY", "from-env-file");
 
@@ -642,7 +657,7 @@ fn test_endpoint_detail_string() {
             prompt: Some("0.00000045".to_string()),
             completion: Some("0.00000225".to_string()),
             input_cache_read: Some("0.00000007".to_string()),
-            input_cache_write: None,
+            input_cache_write: Some("0.00000012".to_string()),
         },
         context_length: Some(131072),
         max_completion_tokens: Some(8192),
@@ -661,11 +676,35 @@ fn test_endpoint_detail_string() {
     );
     assert!(detail.contains("100%"), "should contain uptime: {}", detail);
     assert!(
+        detail.contains("out $2.25/M"),
+        "should contain output price: {}",
+        detail
+    );
+    assert!(
+        detail.contains("cache write $0.12/M"),
+        "should contain cache write price: {}",
+        detail
+    );
+    assert!(
+        detail.contains("cache read $0.07/M"),
+        "should contain cache read price: {}",
+        detail
+    );
+    assert!(
+        detail.contains("500ms p50"),
+        "should contain latency: {}",
+        detail
+    );
+    assert!(
         detail.contains("42tps"),
         "should contain throughput: {}",
         detail
     );
-    assert!(detail.contains("cache"), "should contain cache: {}", detail);
+    assert!(
+        detail.contains("cache on"),
+        "should contain cache: {}",
+        detail
+    );
     assert!(
         detail.contains("fp8"),
         "should contain quantization: {}",

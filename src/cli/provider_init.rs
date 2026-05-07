@@ -40,6 +40,8 @@ pub enum ProviderChoice {
     )]
     OpenaiApi,
     Openrouter,
+    #[value(alias = "aws-bedrock", alias = "aws_bedrock")]
+    Bedrock,
     #[value(alias = "azure-openai", alias = "aoai")]
     Azure,
     #[value(alias = "opencode-zen", alias = "zen")]
@@ -119,6 +121,7 @@ impl ProviderChoice {
             Self::Openai => "openai",
             Self::OpenaiApi => "openai-api",
             Self::Openrouter => "openrouter",
+            Self::Bedrock => "bedrock",
             Self::Azure => "azure",
             Self::Opencode => "opencode",
             Self::OpencodeGo => "opencode-go",
@@ -206,6 +209,7 @@ pub fn login_provider_for_choice(choice: &ProviderChoice) -> Option<LoginProvide
         ProviderChoice::Openai => Some(crate::provider_catalog::OPENAI_LOGIN_PROVIDER),
         ProviderChoice::OpenaiApi => Some(crate::provider_catalog::OPENAI_API_LOGIN_PROVIDER),
         ProviderChoice::Openrouter => Some(crate::provider_catalog::OPENROUTER_LOGIN_PROVIDER),
+        ProviderChoice::Bedrock => Some(crate::provider_catalog::BEDROCK_LOGIN_PROVIDER),
         ProviderChoice::Azure => Some(crate::provider_catalog::AZURE_LOGIN_PROVIDER),
         ProviderChoice::Opencode => Some(crate::provider_catalog::OPENCODE_LOGIN_PROVIDER),
         ProviderChoice::OpencodeGo => Some(crate::provider_catalog::OPENCODE_GO_LOGIN_PROVIDER),
@@ -257,6 +261,7 @@ pub fn choice_for_login_provider(provider: LoginProviderDescriptor) -> Option<Pr
         LoginProviderTarget::OpenAi => Some(ProviderChoice::Openai),
         LoginProviderTarget::OpenAiApiKey => Some(ProviderChoice::OpenaiApi),
         LoginProviderTarget::OpenRouter => Some(ProviderChoice::Openrouter),
+        LoginProviderTarget::Bedrock => Some(ProviderChoice::Bedrock),
         LoginProviderTarget::Azure => Some(ProviderChoice::Azure),
         LoginProviderTarget::OpenAiCompatible(profile) => [
             ProviderChoice::Opencode,
@@ -1040,6 +1045,11 @@ pub async fn login_and_bootstrap_provider(
             disable_subscription_runtime_mode();
             Arc::new(provider::MultiProvider::new())
         }
+        LoginProviderTarget::Bedrock => {
+            disable_subscription_runtime_mode();
+            lock_model_provider("bedrock");
+            Arc::new(provider::MultiProvider::new())
+        }
         LoginProviderTarget::Azure => {
             disable_subscription_runtime_mode();
             crate::auth::azure::apply_runtime_env()?;
@@ -1225,6 +1235,12 @@ async fn init_provider_with_options(
             ensure_external_api_key_auth_allowed_for_explicit_choice("OPENROUTER_API_KEY")?;
             init_notice("Using OpenRouter provider (provider locked)");
             lock_model_provider("openrouter");
+            Arc::new(provider::MultiProvider::new_fast())
+        }
+        ProviderChoice::Bedrock => {
+            disable_subscription_runtime_mode();
+            init_notice("Using AWS Bedrock provider (provider locked)");
+            lock_model_provider("bedrock");
             Arc::new(provider::MultiProvider::new_fast())
         }
         ProviderChoice::Azure => {

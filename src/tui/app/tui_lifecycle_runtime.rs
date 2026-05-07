@@ -1,5 +1,5 @@
 use super::*;
-use crate::tui::{connection_type_icon, ui};
+use crate::tui::connection_type_icon;
 
 impl App {
     /// Create an App instance for replay mode (playing back a saved session)
@@ -32,22 +32,16 @@ impl App {
         };
         app.remote_provider_model = Some(effective_model.clone());
         // Infer provider name from model string
-        let provider_name = if effective_model.contains("claude")
-            || effective_model.contains("opus")
-            || effective_model.contains("sonnet")
-            || effective_model.contains("haiku")
-        {
-            "anthropic"
-        } else if effective_model.contains("gpt")
-            || effective_model.contains("o1")
-            || effective_model.contains("o3")
-            || effective_model.contains("o4")
-        {
-            "openai"
-        } else if effective_model.contains('/') {
-            "openrouter"
-        } else {
-            "claude"
+        let provider_name = match crate::provider::provider_for_model(&effective_model) {
+            Some("claude") => "anthropic",
+            Some("openai") => "openai",
+            Some("openrouter") => "openrouter",
+            Some("bedrock") => "bedrock",
+            Some("gemini") => "gemini",
+            Some("cursor") => "cursor",
+            Some("antigravity") => "antigravity",
+            Some(other) => other,
+            None => "claude",
         };
         app.remote_provider_name = Some(provider_name.to_string());
 
@@ -82,6 +76,10 @@ impl App {
             .map(|s| s.to_string())
             .unwrap_or_else(|| session_id.to_string());
         let session_icon = crate::id::session_icon(&session_name);
+        let session_label = crate::process_title::terminal_session_label(
+            &session_name,
+            self.session.display_title(),
+        );
         let is_canary = if self.is_remote {
             self.remote_is_canary.unwrap_or(self.session.is_canary)
         } else {
@@ -108,10 +106,7 @@ impl App {
             std::io::stdout(),
             crossterm::terminal::SetTitle(format!(
                 "{} {} {}{}",
-                icon,
-                server_label,
-                ui::capitalize(&session_name),
-                suffix
+                icon, server_label, session_label, suffix
             ))
         );
     }

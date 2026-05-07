@@ -98,6 +98,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/back", "Return to the previous Catch Up session"),
     RegisteredCommand::public("/save", "Bookmark session for easy access"),
     RegisteredCommand::public("/unsave", "Remove bookmark from session"),
+    RegisteredCommand::public("/rename", "Rename current session"),
     RegisteredCommand::public("/split", "Split session into a new window"),
     RegisteredCommand::public("/transfer", "Compact context into a fresh handoff session"),
     RegisteredCommand::public("/workspace", "Niri-style session workspace"),
@@ -353,8 +354,9 @@ impl App {
         if model.is_empty() {
             return Vec::new();
         }
-        let openrouter_model = crate::provider::openrouter_catalog_model_id(model)
-            .unwrap_or_else(|| model.to_string());
+        let Some(openrouter_model) = crate::provider::openrouter_catalog_model_id(model) else {
+            return Vec::new();
+        };
 
         let mut seen = std::collections::HashSet::new();
         let mut suggestions = Vec::new();
@@ -1181,6 +1183,7 @@ impl App {
                 | "/alignment"
                 | "/config"
                 | "/save"
+                | "/rename"
                 | "/cache"
         )
     }

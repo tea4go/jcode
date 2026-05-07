@@ -25,7 +25,7 @@ use single_session_render::*;
 use wgpu::util::DeviceExt;
 use wgpu::{CompositeAlphaMode, PresentMode, SurfaceError, TextureUsages};
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Fullscreen, Window, WindowBuilder};
@@ -74,6 +74,10 @@ const SESSION_SPAWN_REFRESH_DELAY: Duration = Duration::from_millis(350);
 const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(33);
 const HEADLESS_CHAT_SMOKE_TIMEOUT: Duration = Duration::from_secs(90);
 const DESKTOP_SPINNER_FRAME_MS: u128 = 180;
+const MOUSE_WHEEL_LINES_PER_DETENT: f32 = 3.0;
+const MAX_MOUSE_SCROLL_LINES_PER_EVENT: f32 = 24.0;
+const SCROLL_GESTURE_IDLE_RESET: Duration = Duration::from_millis(180);
+const SCROLL_FRACTIONAL_EPSILON: f32 = 0.000_1;
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.955,
@@ -123,8 +127,6 @@ const PANEL_SECTION_COLOR: [f32; 4] = [0.045, 0.055, 0.080, 0.95];
 const SELECTION_HIGHLIGHT_COLOR: [f32; 4] = [0.220, 0.420, 0.700, 0.22];
 const STREAMING_SHIMMER_SOFT_COLOR: [f32; 4] = [0.220, 0.520, 0.780, 0.055];
 const STREAMING_SHIMMER_CORE_COLOR: [f32; 4] = [0.220, 0.520, 0.780, 0.115];
-const COMPOSER_CARD_BACKGROUND_COLOR: [f32; 4] = [0.990, 0.995, 1.000, 0.52];
-const COMPOSER_CARD_BORDER_COLOR: [f32; 4] = [0.085, 0.110, 0.160, 0.24];
 const NATIVE_SPINNER_TRACK_COLOR: [f32; 4] = [0.105, 0.135, 0.190, 0.16];
 const NATIVE_SPINNER_HEAD_COLOR: [f32; 4] = [0.045, 0.185, 0.470, 0.96];
 const CODE_BLOCK_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.075];
@@ -170,6 +172,9 @@ fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
+    let startup_benchmark = startup_benchmark_requested(&args);
+    let startup_trace = DesktopStartupTrace::new(startup_benchmark || startup_log_requested(&args));
+    startup_trace.mark("args parsed");
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", desktop_help_text());
         return Ok(());
@@ -184,6 +189,7 @@ async fn run() -> Result<()> {
     let fullscreen = args.iter().any(|arg| arg == "--fullscreen");
     let desktop_mode = desktop_mode_from_args(args.iter().map(String::as_str));
     let event_loop = EventLoop::new().context("failed to create event loop")?;
+    startup_trace.mark("event loop created");
     let mut window_builder = WindowBuilder::new()
         .with_title("Jcode Desktop")
         .with_inner_size(LogicalSize::new(
@@ -200,6 +206,7 @@ async fn run() -> Result<()> {
             .build(&event_loop)
             .context("failed to create desktop window")?,
     ));
+    startup_trace.mark("window created");
 
     let mut app = if desktop_mode == DesktopMode::WorkspacePrototype {
         let session_cards = load_session_cards_for_desktop();
@@ -211,14 +218,20 @@ async fn run() -> Result<()> {
     } else {
         fresh_single_session_app()
     };
+    startup_trace.mark("app state initialized");
     window.set_title(&app.status_title());
-    let mut canvas = Canvas::new(window).await?;
+    let mut canvas = Canvas::new(window, startup_trace).await?;
+    startup_trace.mark("canvas ready");
     let mut modifiers = ModifiersState::empty();
     let mut cursor_position = winit::dpi::PhysicalPosition::new(0.0, 0.0);
     let mut selecting_body = false;
+    let mut scroll_accumulator = ScrollLineAccumulator::default();
     let mut hot_reloader = DesktopHotReloader::new();
     let mut power_inhibitor = power_inhibit::PowerInhibitor::new();
     let (session_event_tx, session_event_rx) = mpsc::channel();
+    let (recovery_count_tx, recovery_count_rx) = mpsc::channel();
+    let mut recovery_scan_pending = app.is_single_session();
+    let mut first_frame_presented = false;
 
     event_loop.run(move |event, target| {
         let has_background_work = app.has_background_work();
@@ -245,9 +258,24 @@ async fn run() -> Result<()> {
                 WindowEvent::ModifiersChanged(new_modifiers) => {
                     modifiers = new_modifiers.state();
                 }
-                WindowEvent::MouseWheel { delta, .. } => {
-                    if let Some(lines) = mouse_scroll_lines(delta) {
-                        app.scroll_single_session_body(lines);
+                WindowEvent::MouseWheel { delta, phase, .. } => {
+                    let size = window.inner_size();
+                    let previous_smooth_scroll =
+                        app.single_session_smooth_scroll_lines(scroll_accumulator.pending_lines(), size);
+                    let mut should_redraw = false;
+                    if !app.is_single_session() {
+                        scroll_accumulator.reset();
+                    } else if let Some(lines) = scroll_accumulator.scroll_lines(delta, Instant::now()) {
+                        should_redraw |= app.scroll_single_session_body(lines, size);
+                    }
+                    if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                        scroll_accumulator.reset();
+                    }
+                    let next_smooth_scroll =
+                        app.single_session_smooth_scroll_lines(scroll_accumulator.pending_lines(), size);
+                    should_redraw |= (next_smooth_scroll - previous_smooth_scroll).abs()
+                        >= SCROLL_FRACTIONAL_EPSILON;
+                    if should_redraw {
                         window.request_redraw();
                     }
                 }
@@ -288,7 +316,7 @@ async fn run() -> Result<()> {
                             selecting_body = false;
                             let selected = app.selected_single_session_text(window.inner_size());
                             if let Some(text) = selected {
-                                copy_text_to_clipboard(&text, &mut app);
+                                copy_text_to_clipboard(&text, "copied selection", &mut app);
                             }
                             window.set_title(&app.status_title());
                             window.request_redraw();
@@ -298,6 +326,15 @@ async fn run() -> Result<()> {
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed =>
                 {
+                    let size = window.inner_size();
+                    let had_smooth_scroll = app
+                        .single_session_smooth_scroll_lines(scroll_accumulator.pending_lines(), size)
+                        .abs()
+                        >= SCROLL_FRACTIONAL_EPSILON;
+                    scroll_accumulator.reset();
+                    if had_smooth_scroll {
+                        window.request_redraw();
+                    }
                     let key_input = to_key_input(&event.logical_key, modifiers);
                     if key_input == KeyInput::RefreshSessions && app.is_workspace() {
                         if let DesktopApp::Workspace(workspace) = &mut app {
@@ -424,7 +461,12 @@ async fn run() -> Result<()> {
                             window.request_redraw();
                         }
                         KeyOutcome::CopyLatestResponse(text) => {
-                            copy_text_to_clipboard(&text, &mut app);
+                            copy_text_to_clipboard(&text, "copied latest response", &mut app);
+                            window.set_title(&app.status_title());
+                            window.request_redraw();
+                        }
+                        KeyOutcome::CutDraftToClipboard(text) => {
+                            copy_text_to_clipboard(&text, "cut input line", &mut app);
                             window.set_title(&app.status_title());
                             window.request_redraw();
                         }
@@ -457,6 +499,32 @@ async fn run() -> Result<()> {
                         }
                         KeyOutcome::LoadSessionSwitcher => {
                             app.apply_single_session_switcher_cards(load_session_cards_for_desktop());
+                            window.set_title(&app.status_title());
+                            window.request_redraw();
+                        }
+                        KeyOutcome::RestoreCrashedSessions => {
+                            let crashed = load_crashed_session_cards_for_desktop();
+                            if crashed.is_empty() {
+                                apply_single_session_error(
+                                    &mut app,
+                                    anyhow::anyhow!("no crashed sessions found"),
+                                );
+                            } else {
+                                for card in &crashed {
+                                    if let Err(error) = session_launch::launch_validated_resume_session(
+                                        &card.session_id,
+                                        &card.title,
+                                    ) {
+                                        eprintln!(
+                                            "jcode-desktop: failed to restore crashed session {}: {error:#}",
+                                            card.session_id
+                                        );
+                                    }
+                                }
+                                if let DesktopApp::SingleSession(single_session) = &mut app {
+                                    single_session.set_recovery_session_count(0);
+                                }
+                            }
                             window.set_title(&app.status_title());
                             window.request_redraw();
                         }
@@ -505,10 +573,30 @@ async fn run() -> Result<()> {
                         KeyOutcome::None => {}
                     }
                 }
-                WindowEvent::RedrawRequested => match canvas
-                    .render(&app, window.current_monitor().map(|monitor| monitor.size()))
-                {
+                WindowEvent::RedrawRequested => match canvas.render(
+                    &app,
+                    window.current_monitor().map(|monitor| monitor.size()),
+                    app.single_session_smooth_scroll_lines(
+                        scroll_accumulator.pending_lines(),
+                        window.inner_size(),
+                    ),
+                ) {
                     Ok(animation_active) => {
+                        if !first_frame_presented {
+                            first_frame_presented = true;
+                            startup_trace.mark("first frame presented");
+                            if startup_benchmark {
+                                target.exit();
+                                return;
+                            }
+                            if recovery_scan_pending {
+                                recovery_scan_pending = false;
+                                spawn_recovery_session_count_scan(
+                                    recovery_count_tx.clone(),
+                                    startup_trace,
+                                );
+                            }
+                        }
                         if animation_active {
                             window.request_redraw();
                         }
@@ -525,6 +613,14 @@ async fn run() -> Result<()> {
                 _ => {}
             },
             Event::AboutToWait => {
+                if let Ok(recovery_count) = recovery_count_rx.try_recv() {
+                    if let DesktopApp::SingleSession(single_session) = &mut app {
+                        single_session.set_recovery_session_count(recovery_count);
+                        window.set_title(&app.status_title());
+                        window.request_redraw();
+                    }
+                }
+
                 if apply_pending_session_events(&mut app, &session_event_rx) {
                     if let Some(session_id) = app.single_session_live_id() {
                         attach_single_session_by_id(&mut app, &session_id);
@@ -586,6 +682,35 @@ fn load_session_cards_for_desktop() -> Vec<workspace::SessionCard> {
     }
 }
 
+fn load_crashed_session_cards_for_desktop() -> Vec<workspace::SessionCard> {
+    match session_data::load_crashed_session_cards() {
+        Ok(cards) => cards,
+        Err(error) => {
+            eprintln!("jcode-desktop: failed to load crashed session metadata: {error:#}");
+            Vec::new()
+        }
+    }
+}
+
+fn spawn_recovery_session_count_scan(
+    recovery_count_tx: mpsc::Sender<usize>,
+    startup_trace: DesktopStartupTrace,
+) {
+    if let Err(error) = std::thread::Builder::new()
+        .name("jcode-desktop-recovery-scan".to_string())
+        .spawn(move || {
+            startup_trace.mark("recovery scan started");
+            let recovery_count = load_crashed_session_cards_for_desktop().len();
+            startup_trace.mark(&format!(
+                "recovery scan completed ({recovery_count} crashed)"
+            ));
+            let _ = recovery_count_tx.send(recovery_count);
+        })
+    {
+        eprintln!("jcode-desktop: failed to start recovery scan: {error:#}");
+    }
+}
+
 fn headless_chat_smoke_message(args: &[String]) -> Option<String> {
     args.iter().enumerate().find_map(|(index, arg)| {
         arg.strip_prefix("--headless-chat-smoke=")
@@ -607,6 +732,8 @@ const DESKTOP_HELP_LINES: &[&str] = &[
     "Options:",
     "  --fullscreen                 Start borderless fullscreen",
     "  --workspace                  Open the workspace prototype instead of the single-session chat",
+    "  --startup-log                Print launch timing milestones to stderr",
+    "  --startup-benchmark          Print launch timings and exit after the first frame",
     "  --headless-chat-smoke <MSG>  Run a hidden backend smoke test and print JSON events",
     "  --headless-chat-smoke=<MSG>  Same as above",
     "  -V, --version                Print version information",
@@ -616,6 +743,47 @@ const DESKTOP_HELP_LINES: &[&str] = &[
 
 fn desktop_help_text() -> String {
     DESKTOP_HELP_LINES.join("\n")
+}
+
+fn startup_log_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--startup-log")
+        || std::env::var_os("JCODE_DESKTOP_STARTUP_LOG").is_some_and(env_flag_enabled)
+}
+
+fn startup_benchmark_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--startup-benchmark")
+}
+
+fn env_flag_enabled(value: OsString) -> bool {
+    let value = value.to_string_lossy();
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "off" | "no"
+    )
+}
+
+#[derive(Clone, Copy)]
+struct DesktopStartupTrace {
+    started_at: Instant,
+    enabled: bool,
+}
+
+impl DesktopStartupTrace {
+    fn new(enabled: bool) -> Self {
+        Self {
+            started_at: Instant::now(),
+            enabled,
+        }
+    }
+
+    fn mark(&self, milestone: &str) {
+        if self.enabled {
+            eprintln!(
+                "jcode-desktop startup +{:>7.2} ms  {milestone}",
+                self.started_at.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
 }
 
 fn run_headless_chat_smoke(message: String) -> Result<()> {
@@ -1131,10 +1299,33 @@ impl DesktopApp {
         None
     }
 
-    fn scroll_single_session_body(&mut self, lines: i32) {
+    fn scroll_single_session_body(&mut self, lines: i32, size: PhysicalSize<u32>) -> bool {
         if let Self::SingleSession(app) = self {
+            let previous_scroll_lines = app.body_scroll_lines;
             app.scroll_body_lines(lines);
+            if let Some(metrics) = single_session_body_scroll_metrics(app, size, 0) {
+                app.body_scroll_lines = app.body_scroll_lines.min(metrics.max_scroll_lines);
+            } else {
+                app.body_scroll_lines = 0;
+            }
+            return app.body_scroll_lines != previous_scroll_lines;
         }
+        false
+    }
+
+    fn single_session_smooth_scroll_lines(
+        &self,
+        pending_lines: f32,
+        size: PhysicalSize<u32>,
+    ) -> f32 {
+        let Self::SingleSession(app) = self else {
+            return 0.0;
+        };
+        let Some(metrics) = single_session_body_scroll_metrics(app, size, 0) else {
+            return 0.0;
+        };
+        let base_scroll = app.body_scroll_lines.min(metrics.max_scroll_lines) as f32;
+        (base_scroll + pending_lines).clamp(0.0, metrics.max_scroll_lines as f32) - base_scroll
     }
 
     fn single_session_live_id(&self) -> Option<String> {
@@ -1174,15 +1365,24 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         Key::Named(NamedKey::Enter) if modifiers.control_key() => KeyInput::QueueDraft,
         Key::Named(NamedKey::Enter) if modifiers.shift_key() => KeyInput::Enter,
         Key::Named(NamedKey::Enter) => KeyInput::SubmitDraft,
-        Key::Named(NamedKey::Backspace) if modifiers.control_key() => KeyInput::DeletePreviousWord,
+        Key::Named(NamedKey::Backspace) if modifiers.control_key() || modifiers.alt_key() => {
+            KeyInput::DeletePreviousWord
+        }
         Key::Named(NamedKey::Backspace) => KeyInput::Backspace,
         Key::Named(NamedKey::Delete) => KeyInput::DeleteNextChar,
         Key::Named(NamedKey::PageUp) => KeyInput::ScrollBodyPages(1),
         Key::Named(NamedKey::PageDown) => KeyInput::ScrollBodyPages(-1),
+        Key::Named(NamedKey::ArrowUp) if modifiers.control_key() => KeyInput::RetrieveQueuedDraft,
         Key::Named(NamedKey::ArrowUp) if modifiers.alt_key() => KeyInput::JumpPrompt(-1),
         Key::Named(NamedKey::ArrowDown) if modifiers.alt_key() => KeyInput::JumpPrompt(1),
         Key::Named(NamedKey::ArrowUp) => KeyInput::ModelPickerMove(-1),
         Key::Named(NamedKey::ArrowDown) => KeyInput::ModelPickerMove(1),
+        Key::Named(NamedKey::ArrowLeft) if modifiers.control_key() || modifiers.alt_key() => {
+            KeyInput::MoveCursorWordLeft
+        }
+        Key::Named(NamedKey::ArrowRight) if modifiers.control_key() || modifiers.alt_key() => {
+            KeyInput::MoveCursorWordRight
+        }
         Key::Named(NamedKey::ArrowLeft) => KeyInput::MoveCursorLeft,
         Key::Named(NamedKey::ArrowRight) => KeyInput::MoveCursorRight,
         Key::Named(NamedKey::Home) => KeyInput::MoveToLineStart,
@@ -1193,11 +1393,23 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("e") => {
             KeyInput::MoveToLineEnd
         }
+        Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("b") => {
+            KeyInput::MoveCursorWordLeft
+        }
+        Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("f") => {
+            KeyInput::MoveCursorWordRight
+        }
         Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("u") => {
             KeyInput::DeleteToLineStart
         }
         Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("k") => {
             KeyInput::DeleteToLineEnd
+        }
+        Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("w") => {
+            KeyInput::DeletePreviousWord
+        }
+        Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("x") => {
+            KeyInput::CutInputLine
         }
         Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("z") => {
             KeyInput::UndoInput
@@ -1209,7 +1421,10 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         {
             KeyInput::CopyLatestResponse
         }
-        Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("c") => {
+        Key::Character(text)
+            if modifiers.control_key()
+                && (text.eq_ignore_ascii_case("c") || text.eq_ignore_ascii_case("d")) =>
+        {
             KeyInput::CancelGeneration
         }
         Key::Character(text) if modifiers.alt_key() && text.eq_ignore_ascii_case("b") => {
@@ -1220,6 +1435,9 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         }
         Key::Character(text) if modifiers.alt_key() && text.eq_ignore_ascii_case("d") => {
             KeyInput::DeleteNextWord
+        }
+        Key::Character(text) if modifiers.alt_key() && text.eq_ignore_ascii_case("v") => {
+            KeyInput::AttachClipboardImage
         }
         Key::Character(text) if modifiers.control_key() && text == ";" => KeyInput::SpawnPanel,
         Key::Character(text) if modifiers.control_key() && (text == "?" || text == "/") => {
@@ -1300,10 +1518,10 @@ fn apply_single_session_error(app: &mut DesktopApp, error: anyhow::Error) {
     )));
 }
 
-fn copy_text_to_clipboard(text: &str, app: &mut DesktopApp) {
+fn copy_text_to_clipboard(text: &str, success_notice: &'static str, app: &mut DesktopApp) {
     match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text.to_string())) {
         Ok(()) => app.apply_session_event(session_launch::DesktopSessionEvent::Status(
-            "copied latest response".to_string(),
+            success_notice.to_string(),
         )),
         Err(error) => app.apply_session_event(session_launch::DesktopSessionEvent::Error(format!(
             "failed to copy latest response: {error}"
@@ -1359,12 +1577,77 @@ fn clipboard_text() -> Result<String> {
         .context("clipboard does not contain text")
 }
 
+#[derive(Clone, Debug, Default)]
+struct ScrollLineAccumulator {
+    pending_lines: f32,
+    last_event_at: Option<Instant>,
+}
+
+impl ScrollLineAccumulator {
+    fn scroll_lines(&mut self, delta: MouseScrollDelta, now: Instant) -> Option<i32> {
+        if self
+            .last_event_at
+            .is_some_and(|last| now.saturating_duration_since(last) > SCROLL_GESTURE_IDLE_RESET)
+        {
+            self.pending_lines = 0.0;
+        }
+        self.last_event_at = Some(now);
+        self.accumulate(mouse_scroll_delta_lines(delta))
+    }
+
+    fn reset(&mut self) {
+        self.pending_lines = 0.0;
+        self.last_event_at = None;
+    }
+
+    fn pending_lines(&self) -> f32 {
+        self.pending_lines
+    }
+
+    fn accumulate(&mut self, lines: f32) -> Option<i32> {
+        if !lines.is_finite() || lines.abs() < SCROLL_FRACTIONAL_EPSILON {
+            return None;
+        }
+
+        let lines = lines.clamp(
+            -MAX_MOUSE_SCROLL_LINES_PER_EVENT,
+            MAX_MOUSE_SCROLL_LINES_PER_EVENT,
+        );
+        if self.pending_lines.abs() >= SCROLL_FRACTIONAL_EPSILON
+            && self.pending_lines.signum() != lines.signum()
+        {
+            self.pending_lines = 0.0;
+        }
+
+        self.pending_lines += lines;
+        if self.pending_lines.abs() < 1.0 {
+            return None;
+        }
+
+        let whole_lines = self.pending_lines.trunc() as i32;
+        self.pending_lines -= whole_lines as f32;
+        if self.pending_lines.abs() < SCROLL_FRACTIONAL_EPSILON {
+            self.pending_lines = 0.0;
+        }
+        (whole_lines != 0).then_some(whole_lines)
+    }
+}
+
+#[cfg(test)]
 fn mouse_scroll_lines(delta: MouseScrollDelta) -> Option<i32> {
-    let lines = match delta {
-        MouseScrollDelta::LineDelta(_, y) => (y * 3.0).round() as i32,
-        MouseScrollDelta::PixelDelta(position) => (position.y / 40.0).round() as i32,
-    };
-    (lines != 0).then_some(lines)
+    ScrollLineAccumulator::default().scroll_lines(delta, Instant::now())
+}
+
+fn mouse_scroll_delta_lines(delta: MouseScrollDelta) -> f32 {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => y * MOUSE_WHEEL_LINES_PER_DETENT,
+        MouseScrollDelta::PixelDelta(position) => position.y as f32 / body_scroll_line_pixels(),
+    }
+}
+
+fn body_scroll_line_pixels() -> f32 {
+    let typography = single_session_typography();
+    typography.body_size * typography.body_line_height
 }
 
 fn desktop_spinner_tick(_now: Instant) -> u64 {
@@ -1394,15 +1677,17 @@ struct Canvas<'window> {
 }
 
 impl<'window> Canvas<'window> {
-    async fn new(window: &'window Window) -> Result<Self> {
+    async fn new(window: &'window Window, startup_trace: DesktopStartupTrace) -> Result<Self> {
         let size = non_zero_size(window.inner_size());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
+        startup_trace.mark("wgpu instance created");
         let surface = instance
             .create_surface(window)
             .context("failed to create wgpu surface")?;
+        startup_trace.mark("wgpu surface created");
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -1411,6 +1696,7 @@ impl<'window> Canvas<'window> {
             })
             .await
             .context("failed to find a compatible GPU adapter")?;
+        startup_trace.mark("wgpu adapter ready");
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -1422,6 +1708,7 @@ impl<'window> Canvas<'window> {
             )
             .await
             .context("failed to create wgpu device")?;
+        startup_trace.mark("wgpu device ready");
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
             .formats
@@ -1453,6 +1740,7 @@ impl<'window> Canvas<'window> {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        startup_trace.mark("surface configured");
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("jcode-desktop-primitive-shader"),
@@ -1493,6 +1781,7 @@ impl<'window> Canvas<'window> {
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
+        startup_trace.mark("primitive pipeline ready");
         let mut text_atlas = TextAtlas::new(&device, &queue, format);
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
@@ -1500,6 +1789,7 @@ impl<'window> Canvas<'window> {
             wgpu::MultisampleState::default(),
             None,
         );
+        startup_trace.mark("text renderer ready");
 
         Ok(Self {
             surface,
@@ -1533,8 +1823,18 @@ impl<'window> Canvas<'window> {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn refresh_cached_single_session_text_buffers(&mut self, app: &SingleSessionApp, now: Instant) {
-        let key = single_session_text_key_for_tick(app, self.size, desktop_spinner_tick(now));
+    fn refresh_cached_single_session_text_buffers(
+        &mut self,
+        app: &SingleSessionApp,
+        now: Instant,
+        smooth_scroll_lines: f32,
+    ) {
+        let key = single_session_text_key_for_tick_with_scroll(
+            app,
+            self.size,
+            desktop_spinner_tick(now),
+            smooth_scroll_lines,
+        );
         if self.single_session_text_key.as_ref() != Some(&key) {
             self.single_session_text_buffers =
                 single_session_text_buffers_from_key(&key, self.size, &mut self.font_system);
@@ -1546,6 +1846,7 @@ impl<'window> Canvas<'window> {
         &mut self,
         app: &DesktopApp,
         monitor_size: Option<PhysicalSize<u32>>,
+        smooth_scroll_lines: f32,
     ) -> std::result::Result<bool, SurfaceError> {
         let frame = self.surface.get_current_texture()?;
         let view = frame
@@ -1564,11 +1865,12 @@ impl<'window> Canvas<'window> {
                 let animation_active =
                     self.focus_pulse.is_animating() || single_session.has_background_work();
                 (
-                    build_single_session_vertices(
+                    build_single_session_vertices_with_scroll(
                         single_session,
                         self.size,
                         focus_pulse,
                         spinner_tick,
+                        smooth_scroll_lines,
                     ),
                     animation_active,
                 )
@@ -1586,13 +1888,19 @@ impl<'window> Canvas<'window> {
             }
         };
         if let DesktopApp::SingleSession(single_session) = app {
-            self.refresh_cached_single_session_text_buffers(single_session, now);
+            self.refresh_cached_single_session_text_buffers(
+                single_session,
+                now,
+                smooth_scroll_lines,
+            );
         } else {
             self.single_session_text_key = None;
             self.single_session_text_buffers.clear();
         }
         let text_buffers = &self.single_session_text_buffers;
-        if let DesktopApp::SingleSession(single_session) = app {
+        if let DesktopApp::SingleSession(single_session) = app
+            && spinner_tick % 6 < 3
+        {
             push_single_session_caret(
                 &mut vertices,
                 single_session,
@@ -1607,7 +1915,17 @@ impl<'window> Canvas<'window> {
                 contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let text_areas = single_session_text_areas(&text_buffers, self.size);
+        let text_areas = if let DesktopApp::SingleSession(single_session) = app {
+            single_session_text_areas_for_app_with_scroll(
+                single_session,
+                text_buffers,
+                self.size,
+                spinner_tick,
+                smooth_scroll_lines,
+            )
+        } else {
+            single_session_text_areas(text_buffers, self.size)
+        };
         if !text_areas.is_empty() {
             if let Err(error) = self.text_renderer.prepare(
                 &self.device,

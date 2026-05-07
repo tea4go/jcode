@@ -77,6 +77,7 @@ pub enum KeyInput {
     MoveToLineEnd,
     DeleteToLineStart,
     DeleteToLineEnd,
+    CutInputLine,
     UndoInput,
     CancelGeneration,
     ScrollBodyPages(i32),
@@ -90,6 +91,7 @@ pub enum KeyInput {
     ClearAttachedImages,
     PasteText,
     QueueDraft,
+    RetrieveQueuedDraft,
     SubmitDraft,
     SpawnPanel,
     HotkeyHelp,
@@ -116,8 +118,10 @@ pub enum KeyOutcome {
     },
     CancelGeneration,
     CopyLatestResponse(String),
+    CutDraftToClipboard(String),
     LoadModelCatalog,
     LoadSessionSwitcher,
+    RestoreCrashedSessions,
     SetModel(String),
     CycleModel(i8),
     SendStdinResponse {
@@ -484,7 +488,9 @@ impl Workspace {
             | KeyInput::AttachClipboardImage
             | KeyInput::ClearAttachedImages
             | KeyInput::PasteText
-            | KeyInput::QueueDraft => {
+            | KeyInput::QueueDraft
+            | KeyInput::RetrieveQueuedDraft
+            | KeyInput::CutInputLine => {
                 return KeyOutcome::None;
             }
             _ => {}
@@ -596,6 +602,7 @@ impl Workspace {
             | KeyInput::MoveToLineStart
             | KeyInput::MoveToLineEnd
             | KeyInput::DeleteToLineEnd
+            | KeyInput::CutInputLine
             | KeyInput::UndoInput
             | KeyInput::CancelGeneration
             | KeyInput::ScrollBodyPages(_)
@@ -605,6 +612,7 @@ impl Workspace {
             | KeyInput::OpenSessionSwitcher
             | KeyInput::ModelPickerMove(_)
             | KeyInput::CycleModel(_) => KeyOutcome::None,
+            KeyInput::RetrieveQueuedDraft => KeyOutcome::None,
             KeyInput::PasteText => KeyOutcome::PasteText,
             KeyInput::Character(text) => {
                 self.draft.push_str(&text);

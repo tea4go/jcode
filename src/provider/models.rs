@@ -1099,6 +1099,8 @@ pub fn provider_for_model_with_hint(
         Some("claude")
     } else if ALL_OPENAI_MODELS.contains(&model) {
         Some("openai")
+    } else if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(model) {
+        Some("bedrock")
     } else if model.contains('/') {
         Some("openrouter")
     } else if model.starts_with("claude-") {

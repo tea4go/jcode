@@ -169,49 +169,61 @@ impl App {
                 continue;
             }
 
-            let (provider, api_method, available, detail) = if model.contains('/') {
-                (
-                    "auto".to_string(),
-                    "openrouter".to_string(),
-                    auth.openrouter != crate::auth::AuthState::NotConfigured,
-                    "simplified catalog".to_string(),
-                )
-            } else {
-                match crate::provider::provider_for_model(&model) {
-                    Some("claude") => (
-                        "Anthropic".to_string(),
-                        "claude-oauth".to_string(),
-                        auth.anthropic.has_oauth || auth.anthropic.has_api_key,
-                        String::new(),
-                    ),
-                    Some("openai") => unreachable!("OpenAI models are handled above"),
-                    Some("gemini") => (
-                        "Gemini".to_string(),
-                        "code-assist-oauth".to_string(),
-                        auth.gemini != crate::auth::AuthState::NotConfigured,
-                        String::new(),
-                    ),
-                    Some("cursor") => (
-                        "Cursor".to_string(),
-                        "cursor".to_string(),
-                        auth.cursor != crate::auth::AuthState::NotConfigured,
-                        String::new(),
-                    ),
-                    Some("openrouter") => (
+            let (provider, api_method, available, detail) =
+                if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(&model) {
+                    (
+                        "AWS Bedrock".to_string(),
+                        "bedrock".to_string(),
+                        auth.bedrock != crate::auth::AuthState::NotConfigured,
+                        if auth.bedrock == crate::auth::AuthState::NotConfigured {
+                            "no Bedrock credentials or region; run /login bedrock".to_string()
+                        } else {
+                            String::new()
+                        },
+                    )
+                } else if model.contains('/') {
+                    (
                         "auto".to_string(),
                         "openrouter".to_string(),
                         auth.openrouter != crate::auth::AuthState::NotConfigured,
                         "simplified catalog".to_string(),
-                    ),
-                    Some(other) => (other.to_string(), other.to_string(), true, String::new()),
-                    None => (
-                        self.provider.name().to_string(),
-                        "current".to_string(),
-                        true,
-                        String::new(),
-                    ),
-                }
-            };
+                    )
+                } else {
+                    match crate::provider::provider_for_model(&model) {
+                        Some("claude") => (
+                            "Anthropic".to_string(),
+                            "claude-oauth".to_string(),
+                            auth.anthropic.has_oauth || auth.anthropic.has_api_key,
+                            String::new(),
+                        ),
+                        Some("openai") => unreachable!("OpenAI models are handled above"),
+                        Some("gemini") => (
+                            "Gemini".to_string(),
+                            "code-assist-oauth".to_string(),
+                            auth.gemini != crate::auth::AuthState::NotConfigured,
+                            String::new(),
+                        ),
+                        Some("cursor") => (
+                            "Cursor".to_string(),
+                            "cursor".to_string(),
+                            auth.cursor != crate::auth::AuthState::NotConfigured,
+                            String::new(),
+                        ),
+                        Some("openrouter") => (
+                            "auto".to_string(),
+                            "openrouter".to_string(),
+                            auth.openrouter != crate::auth::AuthState::NotConfigured,
+                            "simplified catalog".to_string(),
+                        ),
+                        Some(other) => (other.to_string(), other.to_string(), true, String::new()),
+                        None => (
+                            self.provider.name().to_string(),
+                            "current".to_string(),
+                            true,
+                            String::new(),
+                        ),
+                    }
+                };
 
             routes.push(crate::provider::ModelRoute {
                 model,
@@ -573,13 +585,15 @@ impl App {
             )
         }
 
-        const RECOMMENDED_MODELS: &[&str] = &["gpt-5.5", "claude-opus-4-7", "moonshotai/kimi-k2.6"];
+        const RECOMMENDED_MODELS: &[&str] =
+            &["gpt-5.5", "claude-opus-4-7", "deepseek/deepseek-v4-pro"];
 
         const CLAUDE_OAUTH_ONLY_MODELS: &[&str] = &["claude-opus-4-7"];
 
         const OPENAI_OAUTH_ONLY_MODELS: &[&str] =
             &["gpt-5.5", "gpt-5.4", "gpt-5.4[1m]", "gpt-5.4-pro"];
         const COPILOT_OAUTH_MODELS: &[&str] = &["claude-opus-4.7", "gpt-5.5", "gpt-5.4"];
+        const OPENROUTER_AUTO_ONLY_MODELS: &[&str] = &["deepseek/deepseek-v4-pro"];
 
         fn recommendation_rank(name: &str, recommended_models: &[&str]) -> usize {
             recommended_models
@@ -588,7 +602,10 @@ impl App {
                 .unwrap_or(usize::MAX)
         }
 
-        fn route_can_be_recommended(route: &PickerOption) -> bool {
+        fn route_can_be_recommended(model: &str, route: &PickerOption) -> bool {
+            if model == "deepseek/deepseek-v4-pro" {
+                return route.api_method == "openrouter" && route.provider == "auto";
+            }
             matches!(
                 route.api_method.as_str(),
                 "claude-oauth" | "openai-oauth" | "openai-api-key" | "copilot"
@@ -684,8 +701,9 @@ impl App {
                                 && (*effort == "xhigh" || *effort == "high")
                                 && (!(CLAUDE_OAUTH_ONLY_MODELS.contains(&name.as_str())
                                     || OPENAI_OAUTH_ONLY_MODELS.contains(&name.as_str())
-                                    || COPILOT_OAUTH_MODELS.contains(&name.as_str()))
-                                    || (route_can_be_recommended(route) && route.available)),
+                                    || COPILOT_OAUTH_MODELS.contains(&name.as_str())
+                                    || OPENROUTER_AUTO_ONLY_MODELS.contains(&name.as_str()))
+                                    || (route_can_be_recommended(name, route) && route.available)),
                             recommendation_rank: recommendation_rank(name, RECOMMENDED_MODELS),
                             old: old_threshold_secs > 0
                                 && or_created.map(|t| t < old_threshold_secs).unwrap_or(false),
@@ -703,8 +721,9 @@ impl App {
                     let is_recommended = RECOMMENDED_MODELS.contains(&name.as_str())
                         && (!(CLAUDE_OAUTH_ONLY_MODELS.contains(&name.as_str())
                             || OPENAI_OAUTH_ONLY_MODELS.contains(&name.as_str())
-                            || COPILOT_OAUTH_MODELS.contains(&name.as_str()))
-                            || (route_can_be_recommended(&route) && route.available));
+                            || COPILOT_OAUTH_MODELS.contains(&name.as_str())
+                            || OPENROUTER_AUTO_ONLY_MODELS.contains(&name.as_str()))
+                            || (route_can_be_recommended(name, &route) && route.available));
                     entries.push(PickerEntry {
                         name: name.clone(),
                         options: vec![route],
@@ -876,6 +895,24 @@ impl App {
                 .as_deref()
                 .and_then(crate::provider::openrouter::load_endpoints_disk_cache_public);
 
+            if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(model) {
+                let available = auth.bedrock != crate::auth::AuthState::NotConfigured
+                    || crate::provider::bedrock::BedrockProvider::has_credentials();
+                routes.push(crate::provider::ModelRoute {
+                    model: model.clone(),
+                    provider: "AWS Bedrock".to_string(),
+                    api_method: "bedrock".to_string(),
+                    available,
+                    detail: if available {
+                        String::new()
+                    } else {
+                        "no Bedrock credentials or region; run /login bedrock".to_string()
+                    },
+                    cheapness: None,
+                });
+                continue;
+            }
+
             if model.contains('/') {
                 let cached = openrouter_cached;
                 let auto_detail = cached
@@ -1017,7 +1054,7 @@ impl App {
                     provider: "unknown".to_string(),
                     api_method: "unknown".to_string(),
                     available: false,
-                    detail: String::new(),
+                    detail: "no matching configured provider route".to_string(),
                     cheapness: None,
                 });
             }
@@ -1747,6 +1784,8 @@ impl App {
                             format!("copilot:{}", bare_name)
                         } else if r.api_method == "cursor" {
                             format!("cursor:{}", bare_name)
+                        } else if r.api_method == "bedrock" {
+                            format!("bedrock:{}", bare_name)
                         } else if r.provider == "Antigravity" {
                             format!("antigravity:{}", bare_name)
                         } else if openai_compatible_profile_id_for_route(r).is_some() {
@@ -1770,6 +1809,7 @@ impl App {
                             "openai-oauth" | "openai-api-key" => Some("openai"),
                             "copilot" => Some("copilot"),
                             "cursor" => Some("cursor"),
+                            "bedrock" => Some("bedrock"),
                             "cli" if r.provider == "Antigravity" => Some("antigravity"),
                             "openrouter" => Some("openrouter"),
                             method if method.starts_with("openai-compatible") => {
@@ -1925,6 +1965,7 @@ impl App {
                             "Model → {} via {} ({})",
                             entry.name, route.provider, route.api_method
                         );
+                        let route_detail = route.detail.trim().to_string();
 
                         if self.is_remote {
                             self.inline_interactive_state = None;
@@ -1954,7 +1995,17 @@ impl App {
                         if let Some(effort) = effort {
                             let _ = self.provider.set_reasoning_effort(&effort);
                         }
-                        self.set_status_notice(notice);
+                        if !route_detail.is_empty() {
+                            self.push_display_message(DisplayMessage::system(format!(
+                                "{}\n{}",
+                                notice, route_detail
+                            )));
+                        }
+                        self.set_status_notice(if route_detail.is_empty() {
+                            notice
+                        } else {
+                            format!("{} · {}", notice, route_detail)
+                        });
                     }
                 }
             }
