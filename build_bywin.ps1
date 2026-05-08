@@ -39,7 +39,7 @@ if ($procs) {
 }
 
 Write-Host "[2/4] Cleaning jcode build cache..." -ForegroundColor Cyan
-cargo clean -p jcode 2>&1
+cargo clean -p jcode
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Clean failed" -ForegroundColor Red
     exit $LASTEXITCODE
@@ -47,7 +47,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "[3/4] Building jcode ($Profile)..." -ForegroundColor Cyan
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-cargo build @BuildArgs -p jcode --bin jcode 2>&1
+cargo build @BuildArgs -p jcode --bin jcode
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed" -ForegroundColor Red
     exit $LASTEXITCODE
@@ -61,7 +61,7 @@ if ($Release) {
 }
 
 Write-Host "[4/4] Verifying..." -ForegroundColor Cyan
-$Version = & $Binary --version 2>&1
+$Version = & $Binary --version
 Write-Host ""
 Write-Host "  Binary : $Binary" -ForegroundColor Yellow
 Write-Host "  Version: $Version" -ForegroundColor Yellow
