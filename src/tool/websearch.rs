@@ -69,6 +69,8 @@ impl Tool for WebSearchTool {
             urlencoding::encode(&params.query)
         );
 
+        crate::logging::info(&format!("[websearch] requesting: {}", url));
+
         let response = self
             .client
             .get(&url)
@@ -82,6 +84,10 @@ impl Tool for WebSearchTool {
             .map_err(|e| anyhow::anyhow!("Bing search request failed: {}", e))?;
 
         if !response.status().is_success() {
+            crate::logging::warn(&format!(
+                "[websearch] {} returned status: {}",
+                url, response.status()
+            ));
             return Err(anyhow::anyhow!(
                 "Bing search returned status: {}",
                 response.status()
@@ -89,7 +95,19 @@ impl Tool for WebSearchTool {
         }
 
         let html = response.text().await?;
+        crate::logging::info(&format!(
+            "[websearch] {} returned {} bytes, {} chars",
+            url,
+            html.len(),
+            html.chars().count()
+        ));
+
         let results = parse_bing_results(&html, num_results);
+        crate::logging::info(&format!(
+            "[websearch] parsed {} results for: {}",
+            results.len(),
+            params.query
+        ));
 
         if results.is_empty() {
             return Ok(ToolOutput::new(format!(
