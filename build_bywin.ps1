@@ -28,14 +28,24 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RootDir
 
-Write-Host "[1/3] Cleaning jcode build cache..." -ForegroundColor Cyan
+Write-Host "[1/4] Stopping running jcode processes..." -ForegroundColor Cyan
+$procs = Get-Process -Name "jcode" -ErrorAction SilentlyContinue
+if ($procs) {
+    $procs | Stop-Process -Force
+    Write-Host "  Killed $($procs.Count) process(es)" -ForegroundColor DarkGray
+    Start-Sleep -Milliseconds 500
+} else {
+    Write-Host "  No running jcode processes" -ForegroundColor DarkGray
+}
+
+Write-Host "[2/4] Cleaning jcode build cache..." -ForegroundColor Cyan
 cargo clean -p jcode 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Clean failed" -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
-Write-Host "[2/3] Building jcode ($Profile)..." -ForegroundColor Cyan
+Write-Host "[3/4] Building jcode ($Profile)..." -ForegroundColor Cyan
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 cargo build @BuildArgs -p jcode --bin jcode 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -50,7 +60,7 @@ if ($Release) {
     $Binary = "target\debug\jcode.exe"
 }
 
-Write-Host "[3/3] Verifying..." -ForegroundColor Cyan
+Write-Host "[4/4] Verifying..." -ForegroundColor Cyan
 $Version = & $Binary --version 2>&1
 Write-Host ""
 Write-Host "  Binary : $Binary" -ForegroundColor Yellow

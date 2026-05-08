@@ -20,7 +20,13 @@ pub async fn run() -> Result<()> {
     startup_profile::mark("logging_init");
     logging::cleanup_old_logs();
     startup_profile::mark("log_cleanup");
+    logging::info("============================================================");
     logging::info(&format!("jcode starting ({})", env!("JCODE_VERSION")));
+    logging::info("============================================================");
+    if let Some(path) = logging::log_path() {
+        let msg = format!("log file: {}", path.display());
+        logging::info(&msg);
+    }
     crate::platform::raise_nofile_limit_best_effort(8_192);
     startup_profile::mark("nofile_limit");
 
