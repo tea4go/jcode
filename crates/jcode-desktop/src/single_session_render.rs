@@ -1307,7 +1307,7 @@ pub(crate) fn desktop_header_version_label() -> String {
         .ok()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "unknown binary".to_string());
-    format!("{binary} · {version}")
+    format!("{binary} · {version} · ByLiuQQ")
 }
 
 pub(crate) fn fresh_welcome_version_label() -> String {
