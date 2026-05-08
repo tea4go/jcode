@@ -1,5 +1,5 @@
 # Terminal Emulator Capabilities for TUI Rendering
-
+查找网页，生成yazi安装配置指南
 > Compiled 2026-03-02. Reflects latest stable releases of each terminal.
 > "Yes*" means supported with caveats (see notes). "No" means not supported as of latest release.
 
