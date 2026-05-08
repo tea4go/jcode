@@ -101,11 +101,11 @@ fn main() {
     //   Dirty:   v0.2.17-dev (abc1234, dirty)
     let is_release = std::env::var("JCODE_RELEASE_BUILD").is_ok();
     let version = if is_release {
-        format!("v{}.{}.{} ({})", major, minor, patch, git_hash)
+        format!("v{}.{}.{} ({}) · ByLiuQQ", major, minor, patch, git_hash)
     } else if dirty {
-        format!("v{}.{}.{}-dev ({}, dirty)", major, minor, patch, git_hash)
+        format!("v{}.{}.{}-dev ({}, dirty) · ByLiuQQ", major, minor, patch, git_hash)
     } else {
-        format!("v{}.{}.{}-dev ({})", major, minor, patch, git_hash)
+        format!("v{}.{}.{}-dev ({}) · ByLiuQQ", major, minor, patch, git_hash)
     };
 
     // Set environment variables for compilation
