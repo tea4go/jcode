@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Local;
 use clap::Parser;
 use std::io::IsTerminal;
 use std::process::Command as ProcessCommand;
@@ -25,6 +26,14 @@ pub async fn run() -> Result<()> {
     logging::info("============================================================");
     if let Some(path) = logging::log_path() {
         let msg = format!("log file: {}", path.display());
+        logging::info(&msg);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Ok(meta) = std::fs::metadata(&exe)
+        && let Ok(modified) = meta.modified()
+    {
+        let dt: chrono::DateTime<Local> = modified.into();
+        let msg = format!("build time: {}", dt.format("%Y-%m-%d %H:%M:%S"));
         logging::info(&msg);
     }
     crate::platform::raise_nofile_limit_best_effort(8_192);
